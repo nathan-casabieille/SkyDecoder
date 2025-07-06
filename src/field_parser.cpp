@@ -1,0 +1,290 @@
+#include "skydecoder/field_parser.h"
+#include <stdexcept>
+#include <algorithm>
+#include <cmath>
+#include <bitset>
+
+namespace skydecoder {
+
+ParsedField FieldParser::parse_field(const Field& field_def, ParseContext& context) {
+    ParsedField result;
+    result.name = field_def.name;
+    result.description = field_def.description;
+    result.unit = field_def.unit;
+    
+    try {
+        // Read the necessary bytes for this field
+        auto field_bytes = read_field_bytes(field_def, context);
+        
+        // Extract the raw value according to the number of bits
+        uint32_t raw_value = extract_bits(field_bytes, 0, field_def.bits);
+        
+        // Convert to typed value
+        result.value = convert_raw_value(raw_value, field_def);
+        
+        result.valid = true;
+    } catch (const std::exception& e) {
+        result.valid = false;
+        result.error_message = e.what();
+    }
+    
+    return result;
+}
+
+ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseContext& context) {
+    ParsedDataItem result;
+    result.id = item_def.id;
+    result.name = item_def.name;
+    
+    try {
+        size_t start_position = context.position;
+        size_t bytes_to_read = 0;
+        
+        // Determine how many bytes to read based on the format
+        switch (item_def.format) {
+            case DataFormat::FIXED:
+                if (item_def.length.has_value()) {
+                    bytes_to_read = item_def.length.value();
+                } else {
+                    throw std::runtime_error("Fixed format requires length specification");
+                }
+                break;
+                
+            case DataFormat::EXPLICIT:
+                // The first byte indicates the length
+                if (!context.has_data(1)) {
+                    throw std::runtime_error("Insufficient data for explicit length");
+                }
+                bytes_to_read = context.read_uint8();
+                break;
+                
+            case DataFormat::VARIABLE:
+                // Read byte by byte until FX=0
+                bytes_to_read = 1; // At least one byte
+                while (true) {
+                    if (!context.has_data(bytes_to_read)) {
+                        throw std::runtime_error("Insufficient data for variable length field");
+                    }
+                    
+                    // Check the FX bit (bit 0) of the last byte read
+                    uint8_t last_byte = context.data[start_position + bytes_to_read - 1];
+                    if ((last_byte & 0x01) == 0) {
+                        break; // FX=0, stop
+                    }
+                    bytes_to_read++;
+                }
+                break;
+        }
+        
+        // Create a temporary context for this item's data
+        ParseContext item_context(context.data + start_position, bytes_to_read, context.category);
+        
+        // Parse all fields
+        size_t bit_offset = 0;
+        for (const auto& field_def : item_def.fields) {
+            if (field_def.name == "spare") {
+                // Skip spare fields
+                bit_offset += field_def.bits;
+                continue;
+            }
+            
+            // Create a context for this specific field
+            ParseContext field_context = item_context;
+            field_context.position = bit_offset / 8;
+            
+            auto parsed_field = parse_field(field_def, field_context);
+            result.fields.push_back(parsed_field);
+            
+            // Check if there are extension fields
+            if (field_def.condition.has_value() && !field_def.extension_fields.empty()) {
+                if (evaluate_condition(field_def.condition.value(), result.fields)) {
+                    auto extension_fields = parse_extension_fields(
+                        field_def.extension_fields, item_context, result.fields
+                    );
+                    result.fields.insert(result.fields.end(), 
+                                       extension_fields.begin(), extension_fields.end());
+                }
+            }
+            
+            bit_offset += field_def.bits;
+        }
+        
+        // Advance the main context
+        context.position = start_position + bytes_to_read;
+        result.valid = true;
+        
+    } catch (const std::exception& e) {
+        result.valid = false;
+        result.error_message = e.what();
+    }
+    
+    return result;
+}
+
+std::vector<ParsedField> FieldParser::parse_extension_fields(
+    const std::vector<Field>& extension_fields,
+    ParseContext& context,
+    const std::vector<ParsedField>& parsed_fields) {
+    
+    std::vector<ParsedField> result;
+    
+    for (const auto& field_def : extension_fields) {
+        if (field_def.name == "spare") {
+            continue; // Skip spare fields
+        }
+        
+        auto parsed_field = parse_field(field_def, context);
+        result.push_back(parsed_field);
+    }
+    
+    return result;
+}
+
+uint32_t FieldParser::extract_bits(const std::vector<uint8_t>& data, size_t start_bit, size_t num_bits) {
+    if (num_bits > 32) {
+        throw std::runtime_error("Cannot extract more than 32 bits");
+    }
+    
+    uint32_t result = 0;
+    size_t byte_offset = start_bit / 8;
+    size_t bit_offset = start_bit % 8;
+    
+    for (size_t i = 0; i < num_bits; ++i) {
+        size_t current_byte = byte_offset + (bit_offset + i) / 8;
+        size_t current_bit = 7 - ((bit_offset + i) % 8); // MSB first
+        
+        if (current_byte >= data.size()) {
+            throw std::runtime_error("Bit extraction exceeds data size");
+        }
+        
+        if (data[current_byte] & (1 << current_bit)) {
+            result |= (1 << (num_bits - 1 - i));
+        }
+    }
+    
+    return result;
+}
+
+std::vector<uint8_t> FieldParser::read_field_bytes(const Field& field, ParseContext& context) {
+    size_t bytes_needed = (field.bits + 7) / 8; // Round up
+    return context.read_bytes(bytes_needed);
+}
+
+FieldValue FieldParser::convert_raw_value(uint32_t raw_value, const Field& field) {
+    switch (field.type) {
+        case FieldType::UINT8:
+        case FieldType::UINT1:
+        case FieldType::UINT3:
+            return static_cast<uint8_t>(raw_value);
+            
+        case FieldType::UINT16:
+        case FieldType::UINT12:
+        case FieldType::UINT14:
+            return static_cast<uint16_t>(raw_value);
+            
+        case FieldType::UINT24:
+        case FieldType::UINT32:
+            return raw_value;
+            
+        case FieldType::BOOL:
+            return raw_value != 0;
+            
+        case FieldType::STRING:
+            if (field.encoding.has_value() && field.encoding.value() == "6bit_ascii") {
+                // Convert bytes to 6-bit ASCII string
+                std::vector<uint8_t> bytes;
+                size_t num_bytes = (field.bits + 7) / 8;
+                for (size_t i = 0; i < num_bytes; ++i) {
+                    bytes.push_back((raw_value >> (8 * (num_bytes - 1 - i))) & 0xFF);
+                }
+                return decode_6bit_ascii(bytes);
+            } else {
+                // Standard conversion
+                return std::to_string(raw_value);
+            }
+            
+        case FieldType::BYTES:
+            {
+                std::vector<uint8_t> bytes;
+                size_t num_bytes = (field.bits + 7) / 8;
+                for (size_t i = 0; i < num_bytes; ++i) {
+                    bytes.push_back((raw_value >> (8 * (num_bytes - 1 - i))) & 0xFF);
+                }
+                return bytes;
+            }
+    }
+    
+    return raw_value;
+}
+
+std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
+    std::string result;
+    
+    // ICAO 6-bit ASCII conversion table
+    const char icao_alphabet[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ     0123456789      ";
+    
+    // Extract characters 6 bits at a time
+    size_t total_bits = data.size() * 8;
+    for (size_t bit_pos = 0; bit_pos < total_bits; bit_pos += 6) {
+        if (bit_pos + 6 > total_bits) break;
+        
+        uint8_t char_code = 0;
+        for (int i = 0; i < 6; ++i) {
+            size_t byte_idx = (bit_pos + i) / 8;
+            size_t bit_idx = 7 - ((bit_pos + i) % 8);
+            
+            if (data[byte_idx] & (1 << bit_idx)) {
+                char_code |= (1 << (5 - i));
+            }
+        }
+        
+        if (char_code < sizeof(icao_alphabet)) {
+            char c = icao_alphabet[char_code];
+            if (c != ' ' || !result.empty()) { // Avoid leading spaces
+                result += c;
+            }
+        }
+    }
+    
+    // Remove trailing spaces
+    while (!result.empty() && result.back() == ' ') {
+        result.pop_back();
+    }
+    
+    return result;
+}
+
+bool FieldParser::evaluate_condition(const std::string& condition, const std::vector<ParsedField>& fields) {
+    // Simple parser for conditions like "FX==1"
+    if (condition.find("==") != std::string::npos) {
+        size_t pos = condition.find("==");
+        std::string field_name = condition.substr(0, pos);
+        std::string expected_value = condition.substr(pos + 2);
+        
+        // Clean up spaces
+        field_name.erase(std::remove_if(field_name.begin(), field_name.end(), ::isspace), field_name.end());
+        expected_value.erase(std::remove_if(expected_value.begin(), expected_value.end(), ::isspace), expected_value.end());
+        
+        // Find the field
+        for (const auto& field : fields) {
+            if (field.name == field_name) {
+                // Check the value
+                if (std::holds_alternative<bool>(field.value)) {
+                    bool field_val = std::get<bool>(field.value);
+                    return (expected_value == "1" && field_val) || (expected_value == "0" && !field_val);
+                } else if (std::holds_alternative<uint8_t>(field.value)) {
+                    uint8_t field_val = std::get<uint8_t>(field.value);
+                    return field_val == std::stoi(expected_value);
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
+double FieldParser::apply_lsb(uint32_t raw_value, double lsb) {
+    return raw_value * lsb;
+}
+
+} // namespace skydecoder
