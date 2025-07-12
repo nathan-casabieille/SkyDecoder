@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<asterix_category>
+    <header>
+        <category>002</category>
+        <name>Monoradar Service Messages</name>
+        <description>Service messages from monoradar stations (sector crossing, North/South markers, blind zone filtering)</description>
+        <version>1.2</version>
+        <date>2024-03-15</date>
+        <reference>EUROCONTROL-SPEC-0149-2b</reference>
+    </header>
+
+    <user_application_profile>
+        <uap_items>
+            <item>I002/010</item>  <!-- Data Source Identifier -->
+            <item>I002/000</item>  <!-- Message Type -->
+            <item>I002/020</item>  <!-- Sector Number -->
+            <item>I002/030</item>  <!-- Time of Day -->
+            <item>I002/041</item>  <!-- Antenna Rotation Period -->
+            <item>I002/050</item>  <!-- Station Configuration Status -->
+            <item>I002/060</item>  <!-- Station Processing Mode -->
+            <item>spare</item>
+            <item>I002/070</item>  <!-- Plot Count Values -->
+            <item>I002/100</item>  <!-- Dynamic Window - Type 1 -->
+            <item>I002/090</item>  <!-- Collimation Error -->
+            <item>I002/080</item>  <!-- Warning/Error Conditions -->
+            <item>spare</item>
+            <item>I002/SP</item>   <!-- Special Purpose Field -->
+            <item>I002/RE</item>   <!-- Reserved for RFS Indicator -->
+        </uap_items>
+    </user_application_profile>
+
+    <data_items>
+        <!-- Data Source Identifier -->
+        <data_item id="I002/010">
+            <name>Data Source Identifier</name>
+            <definition>Identification of the radar station from which the data are received</definition>
+            <format>fixed</format>
+            <length>2</length>
+            <structure>
+                <field name="SAC" type="uint8" bits="8" description="System Area Code"/>
+                <field name="SIC" type="uint8" bits="8" description="System Identification Code"/>
+            </structure>
+        </data_item>
+
+        <!-- Message Type -->
+        <data_item id="I002/000">
+            <name>Message Type</name>
+            <definition>This Data Item allows for a more convenient handling of the messages at the receiver side by further defining the type of transaction</definition>
+            <format>fixed</format>
+            <length>1</length>
+            <structure>
+                <field name="MESSAGE_TYPE" type="uint8" bits="8" description="Message Type">
+                    <enum value="1">North marker message</enum>
+                    <enum value="2">Sector crossing message</enum>
+                    <enum value="3">South marker message</enum>
+                    <enum value="8">Activation of blind zone filtering</enum>
+                    <enum value="9">Stop of blind zone filtering</enum>
+                </field>
+            </structure>
+        </data_item>
+
+        <!-- Sector Number -->
+        <data_item id="I002/020">
+            <name>Sector Number</name>
+            <definition>Eight most significant bits of the antenna azimuth defining a particular azimuth sector</definition>
+            <format>fixed</format>
+            <length>1</length>
+            <structure>
+                <field name="SECTOR" type="uint8" bits="8" description="Antenna azimuth (8 MSB)" 
+                       lsb="360/256" unit="degrees"/>
+            </structure>
+        </data_item>
+
+        <!-- Time of Day -->
+        <data_item id="I002/030">
+            <name>Time of Day</name>
+            <definition>Absolute time stamping expressed as UTC time</definition>
+            <format>fixed</format>
+            <length>3</length>
+            <structure>
+                <field name="ToD" type="uint24" bits="24" description="Time of Day in seconds" 
+                       lsb="1/128" unit="s"/>
+            </structure>
+        </data_item>
+
+        <!-- Antenna Rotation Period -->
+        <data_item id="I002/041">
+            <name>Antenna Rotation Period</name>
+            <definition>Antenna rotation period as measured between two consecutive North crossings or as averaged during a period of time</definition>
+            <format>fixed</format>
+            <length>2</length>
+            <structure>
+                <field name="ARP" type="uint16" bits="16" description="Antenna Rotation Period" 
+                       lsb="1/128" unit="s"/>
+            </structure>
+        </data_item>
+
+        <!-- Station Configuration Status -->
+        <data_item id="I002/050">
+            <name>Station Configuration Status</name>
+            <definition>Information concerning the use and status of some vital hardware components of the radar system</definition>
+            <format>variable</format>
+            <structure>
+                <field name="FX" type="bool" bits="1" description="Field Extension"/>
+                <!-- Note: Individual bits not standardized due to hardware diversity -->
+            </structure>
+        </data_item>
+
+        <!-- Station Processing Mode -->
+        <data_item id="I002/060">
+            <name>Station Processing Mode</name>
+            <definition>Details concerning the present status with respect to processing parameters and options</definition>
+            <format>variable</format>
+            <structure>
+                <field name="FX" type="bool" bits="1" description="Field Extension"/>
+                <!-- Note: Individual bits not standardized to allow flexibility -->
+            </structure>
+        </data_item>
+
+        <!-- Plot Count Values -->
+        <data_item id="I002/070">
+            <name>Plot Count Values</name>
+            <definition>Plot count values according to various plot categories, either for the last full antenna scan or for the last sector processed</definition>
+            <format>repetitive</format>
+            <structure>
+                <field name="REP" type="uint8" bits="8" description="Repetition factor"/>
+                <repetitive_group>
+                    <field name="A" type="bool" bits="1" description="Aerial identification">
+                        <enum value="0">Counter for antenna 1</enum>
+                        <enum value="1">Counter for antenna 2</enum>
+                    </field>
+                    <field name="IDENT" type="uint5" bits="5" description="Five-bit plot category identification code">
+                        <enum value="1">Sole primary plots</enum>
+                        <enum value="2">Sole SSR plots</enum>
+                        <enum value="3">Combined plots</enum>
+                    </field>
+                    <field name="COUNTER" type="uint10" bits="10" description="10-bit counter value"/>
+                </repetitive_group>
+            </structure>
+        </data_item>
+
+        <!-- Warning/Error Conditions -->
+        <data_item id="I002/080">
+            <name>Warning/Error Conditions</name>
+            <definition>Warning/error conditions affecting the functioning of the radar system itself</definition>
+            <format>variable</format>
+            <structure>
+                <field name="WE_VALUE" type="uint7" bits="7" description="Warning/error condition value"/>
+                <field name="FX" type="bool" bits="1" description="Field Extension"/>
+                <!-- Extension if FX=1 -->
+                <extension condition="FX==1">
+                    <field name="WE_VALUE2" type="uint7" bits="7" description="Second warning/error condition value"/>
+                    <field name="FX2" type="bool" bits="1" description="Field Extension"/>
+                </extension>
+            </structure>
+        </data_item>
+
+        <!-- Collimation Error -->
+        <data_item id="I002/090">
+            <name>Collimation Error</name>
+            <definition>Averaged difference in range and in azimuth for the primary target position with respect to the SSR target position as calculated by the radar station</definition>
+            <format>fixed</format>
+            <length>2</length>
+            <structure>
+                <field name="RANGE_ERROR" type="int8" bits="8" description="Range Error" 
+                       lsb="1/128" unit="NM"/>
+                <field name="AZIMUTH_ERROR" type="int8" bits="8" description="Azimuth Error" 
+                       lsb="360/65536" unit="degrees"/>
+            </structure>
+        </data_item>
+
+        <!-- Dynamic Window - Type 1 -->
+        <data_item id="I002/100">
+            <name>Dynamic Window - Type 1</name>
+            <definition>Signals the activation of a certain selective filtering function and in a polar coordinates system the respective geographical areas</definition>
+            <format>fixed</format>
+            <length>8</length>
+            <structure>
+                <field name="RHO_START" type="uint16" bits="16" description="Start Range" 
+                       lsb="1/128" unit="NM" max="512"/>
+                <field name="RHO_END" type="uint16" bits="16" description="End Range" 
+                       lsb="1/128" unit="NM" max="512"/>
+                <field name="THETA_START" type="uint16" bits="16" description="Start Azimuth" 
+                       lsb="360/65536" unit="degrees"/>
+                <field name="THETA_END" type="uint16" bits="16" description="End Azimuth" 
+                       lsb="360/65536" unit="degrees"/>
+            </structure>
+        </data_item>
+
+        <!-- Special Purpose Field -->
+        <data_item id="I002/SP">
+            <name>Special Purpose Field</name>
+            <definition>Special Purpose Field</definition>
+            <format>explicit</format>
+            <structure>
+                <field name="data" type="bytes" description="Special purpose data"/>
+            </structure>
+        </data_item>
+
+        <!-- Reserved for RFS Indicator -->
+        <data_item id="I002/RE">
+            <name>Random Field Sequencing</name>
+            <definition>Random Field Sequencing organized field</definition>
+            <format>explicit</format>
+            <structure>
+                <field name="N" type="uint8" bits="8" description="Number of Data Fields following"/>
+                <field name="rfs_data" type="bytes" description="RFS organized data fields"/>
+            </structure>
+        </data_item>
+    </data_items>
+
+    <message_types>
+        <message_type id="1">
+            <name>North Marker Message</name>
+            <description>Signals the crossing of the local geographical North azimuth by the antenna</description>
+            <mandatory_items>
+                <item>I002/010</item>
+                <item>I002/000</item>
+            </mandatory_items>
+            <optional_items>
+                <item>I002/030</item>
+                <item>I002/041</item>
+                <item>I002/050</item>
+                <item>I002/060</item>
+                <item>I002/070</item>
+                <item>I002/090</item>
+                <item>I002/080</item>
+            </optional_items>
+        </message_type>
+
+        <message_type id="2">
+            <name>Sector Crossing Message</name>
+            <description>Signals the crossing of an azimuth defining the beginning of a sector</description>
+            <mandatory_items>
+                <item>I002/010</item>
+                <item>I002/000</item>
+                <item>I002/020</item>
+            </mandatory_items>
+            <optional_items>
+                <item>I002/030</item>
+                <item>I002/050</item>
+                <item>I002/060</item>
+                <item>I002/080</item>
+            </optional_items>
+        </message_type>
+
+        <message_type id="3">
+            <name>South Marker Message</name>
+            <description>Signals the crossing of the local geographical South azimuth by the antenna</description>
+            <mandatory_items>
+                <item>I002/010</item>
+                <item>I002/000</item>
+            </mandatory_items>
+            <optional_items>
+                <item>I002/030</item>
+                <item>I002/050</item>
+                <item>I002/060</item>
+                <item>I002/080</item>
+            </optional_items>
+        </message_type>
+
+        <message_type id="8">
+            <name>Activation of Blind Zone Filtering</name>
+            <description>Signals the activation of geographical selective plots or tracks filtering</description>
+            <mandatory_items>
+                <item>I002/010</item>
+                <item>I002/000</item>
+                <item>I002/100</item>
+            </mandatory_items>
+        </message_type>
+
+        <message_type id="9">
+            <name>Stop of Blind Zone Filtering</name>
+            <description>Signals the deactivation of geographical selective plots or tracks filtering</description>
+            <mandatory_items>
+                <item>I002/010</item>
+                <item>I002/000</item>
+            </mandatory_items>
+        </message_type>
+    </message_types>
+
+    <parsing_rules>
+        <rule name="variable_length_handling">
+            <description>Handle variable length fields with FX bit</description>
+            <condition>format == "variable"</condition>
+            <action>continue_parsing_if_fx_set</action>
+        </rule>
+        
+        <rule name="explicit_length_handling">
+            <description>Handle explicit length fields with length indicator</description>
+            <condition>format == "explicit"</condition>
+            <action>read_length_then_data</action>
+        </rule>
+
+        <rule name="repetitive_handling">
+            <description>Handle repetitive fields with REP indicator</description>
+            <condition>format == "repetitive"</condition>
+            <action>read_rep_then_repeat_group</action>
+        </rule>
+    </parsing_rules>
+
+    <validation_rules>
+        <rule field="I002/010" type="mandatory" description="Always required"/>
+        <rule field="I002/000" type="mandatory" description="Always required"/>
+        <rule field="I002/020" type="conditional" condition="message_type == 2" description="Required for sector crossing messages"/>
+        <rule field="I002/100" type="conditional" condition="message_type == 8" description="Required for blind zone activation messages"/>
+        <rule field="I002/030" type="optional" description="Time stamping when available"/>
+        <rule field="I002/041" type="conditional" condition="message_type == 1 || message_type == 2 && sector == 0" description="Only in North marker or sector 0 crossing"/>
+        <rule field="I002/070" type="conditional" condition="message_type == 1 || message_type == 2 && sector == 0" description="Only in North marker or sector 0 crossing"/>
+        <rule field="I002/090" type="conditional" condition="message_type == 1 || message_type == 2 && sector == 0" description="Only in North marker or sector 0 crossing"/>
+    </validation_rules>
+
+    <encoding_notes>
+        <note>Data Item I002/010 (Data Source Identifier) is compulsory and shall always be transmitted for each type of service messages</note>
+        <note>Data Item I002/000 (Message Type) is compulsory and shall always be transmitted for each type of service messages</note>
+        <note>Data Item I002/020 (Sector Number) is compulsory only for sector crossing messages</note>
+        <note>By convention, Sector 0 crossing message corresponds to the crossing of the North azimuth by the antenna</note>
+        <note>Warning/error condition values 1-63 are reserved for common Standard use, values 64-127 are application dependent</note>
+        <note>Message Type values 1-127 are reserved for common standard use, values 128-255 are application dependent</note>
+    </encoding_notes>
+</asterix_category>

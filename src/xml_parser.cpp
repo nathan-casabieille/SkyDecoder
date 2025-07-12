@@ -331,14 +331,28 @@ std::vector<ValidationRule> XmlParser::parse_validation_rules(const tinyxml2::XM
 }
 
 FieldType XmlParser::string_to_field_type(const std::string& type_str) {
+    // Unsigned integers
     if (type_str == "uint8") return FieldType::UINT8;
     if (type_str == "uint16") return FieldType::UINT16;
     if (type_str == "uint24") return FieldType::UINT24;
     if (type_str == "uint32") return FieldType::UINT32;
     if (type_str == "uint1") return FieldType::UINT1;
+    if (type_str == "uint2") return FieldType::UINT2;
     if (type_str == "uint3") return FieldType::UINT3;
+    if (type_str == "uint4") return FieldType::UINT4;
+    if (type_str == "uint5") return FieldType::UINT5;
+    if (type_str == "uint6") return FieldType::UINT6;
+    if (type_str == "uint7") return FieldType::UINT7;
     if (type_str == "uint12") return FieldType::UINT12;
     if (type_str == "uint14") return FieldType::UINT14;
+    
+    // Signed integers
+    if (type_str == "int8") return FieldType::INT8;
+    if (type_str == "int16") return FieldType::INT16;
+    if (type_str == "int24") return FieldType::INT24;
+    if (type_str == "int32") return FieldType::INT32;
+    
+    // Other types
     if (type_str == "bool") return FieldType::BOOL;
     if (type_str == "string") return FieldType::STRING;
     if (type_str == "bytes") return FieldType::BYTES;
@@ -350,6 +364,7 @@ DataFormat XmlParser::string_to_data_format(const std::string& format_str) {
     if (format_str == "fixed") return DataFormat::FIXED;
     if (format_str == "variable") return DataFormat::VARIABLE;
     if (format_str == "explicit") return DataFormat::EXPLICIT;
+    if (format_str == "repetitive") return DataFormat::REPETITIVE;
     
     throw std::runtime_error("Unknown data format: " + format_str);
 }

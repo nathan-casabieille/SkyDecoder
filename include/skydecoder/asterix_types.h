@@ -12,14 +12,28 @@ namespace skydecoder {
 
 // Basic types for fields
 enum class FieldType {
+    // Unsigned integers
     UINT8,
     UINT16,
     UINT24,
     UINT32,
     UINT1,
+    UINT2,
     UINT3,
+    UINT4,
+    UINT5,
+    UINT6,
+    UINT7,
     UINT12,
     UINT14,
+    
+    // Signed integers
+    INT8,
+    INT16,
+    INT24,
+    INT32,
+    
+    // Other types
     BOOL,
     STRING,
     BYTES
@@ -29,7 +43,8 @@ enum class FieldType {
 enum class DataFormat {
     FIXED,
     VARIABLE,
-    EXPLICIT
+    EXPLICIT,
+    REPETITIVE
 };
 
 // Units of measurement
@@ -49,10 +64,14 @@ using FieldValue = std::variant<
     uint8_t,
     uint16_t,
     uint32_t,
+    int8_t,
+    int16_t,
+    int32_t,
     bool,
     std::string,
     std::vector<uint8_t>
 >;
+
 
 // Structure for enumerations
 struct EnumValue {

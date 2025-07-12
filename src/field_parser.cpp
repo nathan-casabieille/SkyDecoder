@@ -13,13 +13,13 @@ ParsedField FieldParser::parse_field(const Field& field_def, ParseContext& conte
     result.unit = field_def.unit;
     
     try {
-        // Read the necessary bytes for this field
+        // Lire les bytes nécessaires pour ce champ
         auto field_bytes = read_field_bytes(field_def, context);
         
-        // Extract the raw value according to the number of bits
+        // Extraire la valeur brute selon le nombre de bits
         uint32_t raw_value = extract_bits(field_bytes, 0, field_def.bits);
         
-        // Convert to typed value
+        // Convertir en valeur typée
         result.value = convert_raw_value(raw_value, field_def);
         
         result.valid = true;
@@ -40,7 +40,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
         size_t start_position = context.position;
         size_t bytes_to_read = 0;
         
-        // Determine how many bytes to read based on the format
+        // Déterminer combien de bytes lire selon le format
         switch (item_def.format) {
             case DataFormat::FIXED:
                 if (item_def.length.has_value()) {
@@ -51,51 +51,66 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
                 break;
                 
             case DataFormat::EXPLICIT:
-                // The first byte indicates the length
+                // Le premier byte indique la longueur
                 if (!context.has_data(1)) {
                     throw std::runtime_error("Insufficient data for explicit length");
                 }
                 bytes_to_read = context.read_uint8();
                 break;
                 
+            case DataFormat::REPETITIVE:
+                // Le premier byte indique le nombre de répétitions
+                if (!context.has_data(1)) {
+                    throw std::runtime_error("Insufficient data for repetitive length");
+                }
+                {
+                    uint8_t rep_count = context.read_uint8();
+                    if (item_def.length.has_value()) {
+                        bytes_to_read = rep_count * item_def.length.value();
+                    } else {
+                        throw std::runtime_error("Repetitive format requires length specification");
+                    }
+                }
+                break;
+                
             case DataFormat::VARIABLE:
-                // Read byte by byte until FX=0
-                bytes_to_read = 1; // At least one byte
+                // Lire byte par byte jusqu'à ce que FX=0
+                bytes_to_read = 1; // Au moins un byte
                 while (true) {
                     if (!context.has_data(bytes_to_read)) {
                         throw std::runtime_error("Insufficient data for variable length field");
                     }
                     
-                    // Check the FX bit (bit 0) of the last byte read
+                    // Vérifier le bit FX (bit 0) du dernier byte lu
                     uint8_t last_byte = context.data[start_position + bytes_to_read - 1];
                     if ((last_byte & 0x01) == 0) {
-                        break; // FX=0, stop
+                        break; // FX=0, arrêter
                     }
                     bytes_to_read++;
                 }
                 break;
         }
         
-        // Create a temporary context for this item's data
+        // Créer un contexte temporaire pour les données de cet item
         ParseContext item_context(context.data + start_position, bytes_to_read, context.category);
         
-        // Parse all fields
+        // Parser tous les champs
         size_t bit_offset = 0;
         for (const auto& field_def : item_def.fields) {
             if (field_def.name == "spare") {
-                // Skip spare fields
+                // Ignorer les champs spare
                 bit_offset += field_def.bits;
                 continue;
             }
             
-            // Create a context for this specific field
+            // Créer un contexte pour ce champ spécifique
             ParseContext field_context = item_context;
             field_context.position = bit_offset / 8;
             
             auto parsed_field = parse_field(field_def, field_context);
             result.fields.push_back(parsed_field);
             
-            // Check if there are extension fields
+            // Vérifier s'il y a des champs d'extension
             if (field_def.condition.has_value() && !field_def.extension_fields.empty()) {
                 if (evaluate_condition(field_def.condition.value(), result.fields)) {
                     auto extension_fields = parse_extension_fields(
@@ -109,7 +124,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
             bit_offset += field_def.bits;
         }
         
-        // Advance the main context
+        // Avancer le contexte principal
         context.position = start_position + bytes_to_read;
         result.valid = true;
         
@@ -130,7 +145,7 @@ std::vector<ParsedField> FieldParser::parse_extension_fields(
     
     for (const auto& field_def : extension_fields) {
         if (field_def.name == "spare") {
-            continue; // Skip spare fields
+            continue; // Ignorer les champs spare
         }
         
         auto parsed_field = parse_field(field_def, context);
@@ -166,32 +181,73 @@ uint32_t FieldParser::extract_bits(const std::vector<uint8_t>& data, size_t star
 }
 
 std::vector<uint8_t> FieldParser::read_field_bytes(const Field& field, ParseContext& context) {
-    size_t bytes_needed = (field.bits + 7) / 8; // Round up
+    size_t bytes_needed = (field.bits + 7) / 8; // Arrondir vers le haut
     return context.read_bytes(bytes_needed);
 }
 
 FieldValue FieldParser::convert_raw_value(uint32_t raw_value, const Field& field) {
     switch (field.type) {
+        // Small unsigned integers (fit in uint8_t)
         case FieldType::UINT8:
         case FieldType::UINT1:
+        case FieldType::UINT2:
         case FieldType::UINT3:
+        case FieldType::UINT4:
+        case FieldType::UINT5:
+        case FieldType::UINT6:
+        case FieldType::UINT7:
             return static_cast<uint8_t>(raw_value);
             
+        // Medium unsigned integers (fit in uint16_t)
         case FieldType::UINT16:
         case FieldType::UINT12:
         case FieldType::UINT14:
             return static_cast<uint16_t>(raw_value);
             
+        // Large unsigned integers
         case FieldType::UINT24:
         case FieldType::UINT32:
             return raw_value;
+            
+        // Signed integers - need to handle two's complement conversion
+        case FieldType::INT8:
+            {
+                // Convert to signed 8-bit
+                if (raw_value & 0x80) {
+                    return static_cast<int8_t>(raw_value | 0xFFFFFF00);
+                } else {
+                    return static_cast<int8_t>(raw_value);
+                }
+            }
+            
+        case FieldType::INT16:
+            {
+                // Convert to signed 16-bit
+                if (raw_value & 0x8000) {
+                    return static_cast<int16_t>(raw_value | 0xFFFF0000);
+                } else {
+                    return static_cast<int16_t>(raw_value);
+                }
+            }
+            
+        case FieldType::INT24:
+            {
+                // Convert to signed 24-bit (stored in int32_t)
+                if (raw_value & 0x800000) {
+                    return static_cast<int32_t>(raw_value | 0xFF000000);
+                } else {
+                    return static_cast<int32_t>(raw_value);
+                }
+            }
+            
+        case FieldType::INT32:
+            return static_cast<int32_t>(raw_value);
             
         case FieldType::BOOL:
             return raw_value != 0;
             
         case FieldType::STRING:
             if (field.encoding.has_value() && field.encoding.value() == "6bit_ascii") {
-                // Convert bytes to 6-bit ASCII string
                 std::vector<uint8_t> bytes;
                 size_t num_bytes = (field.bits + 7) / 8;
                 for (size_t i = 0; i < num_bytes; ++i) {
@@ -199,7 +255,6 @@ FieldValue FieldParser::convert_raw_value(uint32_t raw_value, const Field& field
                 }
                 return decode_6bit_ascii(bytes);
             } else {
-                // Standard conversion
                 return std::to_string(raw_value);
             }
             
@@ -220,10 +275,10 @@ FieldValue FieldParser::convert_raw_value(uint32_t raw_value, const Field& field
 std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
     std::string result;
     
-    // ICAO 6-bit ASCII conversion table
+    // Table de conversion 6-bit ASCII ICAO
     const char icao_alphabet[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ     0123456789      ";
     
-    // Extract characters 6 bits at a time
+    // Extraire les caractères 6 bits par 6 bits
     size_t total_bits = data.size() * 8;
     for (size_t bit_pos = 0; bit_pos < total_bits; bit_pos += 6) {
         if (bit_pos + 6 > total_bits) break;
@@ -240,13 +295,13 @@ std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
         
         if (char_code < sizeof(icao_alphabet)) {
             char c = icao_alphabet[char_code];
-            if (c != ' ' || !result.empty()) { // Avoid leading spaces
+            if (c != ' ' || !result.empty()) { // Éviter les espaces en début
                 result += c;
             }
         }
     }
     
-    // Remove trailing spaces
+    // Supprimer les espaces en fin
     while (!result.empty() && result.back() == ' ') {
         result.pop_back();
     }
@@ -255,20 +310,20 @@ std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
 }
 
 bool FieldParser::evaluate_condition(const std::string& condition, const std::vector<ParsedField>& fields) {
-    // Simple parser for conditions like "FX==1"
+    // Parser simple pour les conditions comme "FX==1"
     if (condition.find("==") != std::string::npos) {
         size_t pos = condition.find("==");
         std::string field_name = condition.substr(0, pos);
         std::string expected_value = condition.substr(pos + 2);
         
-        // Clean up spaces
+        // Nettoyer les espaces
         field_name.erase(std::remove_if(field_name.begin(), field_name.end(), ::isspace), field_name.end());
         expected_value.erase(std::remove_if(expected_value.begin(), expected_value.end(), ::isspace), expected_value.end());
         
-        // Find the field
+        // Chercher le champ
         for (const auto& field : fields) {
             if (field.name == field_name) {
-                // Check the value
+                // Vérifier la valeur
                 if (std::holds_alternative<bool>(field.value)) {
                     bool field_val = std::get<bool>(field.value);
                     return (expected_value == "1" && field_val) || (expected_value == "0" && !field_val);
