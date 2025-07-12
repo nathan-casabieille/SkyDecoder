@@ -13,13 +13,13 @@ ParsedField FieldParser::parse_field(const Field& field_def, ParseContext& conte
     result.unit = field_def.unit;
     
     try {
-        // Lire les bytes nécessaires pour ce champ
+        // Read the necessary bytes for this field
         auto field_bytes = read_field_bytes(field_def, context);
         
-        // Extraire la valeur brute selon le nombre de bits
+        // Extract the raw value according to the number of bits
         uint32_t raw_value = extract_bits(field_bytes, 0, field_def.bits);
         
-        // Convertir en valeur typée
+        // Convert to typed value
         result.value = convert_raw_value(raw_value, field_def);
         
         result.valid = true;
@@ -40,7 +40,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
         size_t start_position = context.position;
         size_t bytes_to_read = 0;
         
-        // Déterminer combien de bytes lire selon le format
+        // Determine how many bytes to read according to the format
         switch (item_def.format) {
             case DataFormat::FIXED:
                 if (item_def.length.has_value()) {
@@ -51,7 +51,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
                 break;
                 
             case DataFormat::EXPLICIT:
-                // Le premier byte indique la longueur
+                // The first byte indicates the length
                 if (!context.has_data(1)) {
                     throw std::runtime_error("Insufficient data for explicit length");
                 }
@@ -59,7 +59,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
                 break;
                 
             case DataFormat::REPETITIVE:
-                // Le premier byte indique le nombre de répétitions
+                // The first byte indicates the number of repetitions
                 if (!context.has_data(1)) {
                     throw std::runtime_error("Insufficient data for repetitive length");
                 }
@@ -74,43 +74,43 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
                 break;
                 
             case DataFormat::VARIABLE:
-                // Lire byte par byte jusqu'à ce que FX=0
-                bytes_to_read = 1; // Au moins un byte
+                // Read byte by byte until FX=0
+                bytes_to_read = 1; // At least one byte
                 while (true) {
                     if (!context.has_data(bytes_to_read)) {
                         throw std::runtime_error("Insufficient data for variable length field");
                     }
                     
-                    // Vérifier le bit FX (bit 0) du dernier byte lu
+                    // Check the FX bit (bit 0) of the last byte read
                     uint8_t last_byte = context.data[start_position + bytes_to_read - 1];
                     if ((last_byte & 0x01) == 0) {
-                        break; // FX=0, arrêter
+                        break; // FX=0, stop
                     }
                     bytes_to_read++;
                 }
                 break;
         }
         
-        // Créer un contexte temporaire pour les données de cet item
+        // Create a temporary context for the data of this item
         ParseContext item_context(context.data + start_position, bytes_to_read, context.category);
         
-        // Parser tous les champs
+        // Parse all fields
         size_t bit_offset = 0;
         for (const auto& field_def : item_def.fields) {
             if (field_def.name == "spare") {
-                // Ignorer les champs spare
+                // Ignore spare fields
                 bit_offset += field_def.bits;
                 continue;
             }
             
-            // Créer un contexte pour ce champ spécifique
+            // Create a context for this specific field
             ParseContext field_context = item_context;
             field_context.position = bit_offset / 8;
             
             auto parsed_field = parse_field(field_def, field_context);
             result.fields.push_back(parsed_field);
             
-            // Vérifier s'il y a des champs d'extension
+            // Check if there are extension fields
             if (field_def.condition.has_value() && !field_def.extension_fields.empty()) {
                 if (evaluate_condition(field_def.condition.value(), result.fields)) {
                     auto extension_fields = parse_extension_fields(
@@ -124,7 +124,7 @@ ParsedDataItem FieldParser::parse_data_item(const DataItem& item_def, ParseConte
             bit_offset += field_def.bits;
         }
         
-        // Avancer le contexte principal
+        // Advance the main context
         context.position = start_position + bytes_to_read;
         result.valid = true;
         
@@ -145,7 +145,7 @@ std::vector<ParsedField> FieldParser::parse_extension_fields(
     
     for (const auto& field_def : extension_fields) {
         if (field_def.name == "spare") {
-            continue; // Ignorer les champs spare
+            continue; // Ignore spare fields
         }
         
         auto parsed_field = parse_field(field_def, context);
@@ -181,7 +181,7 @@ uint32_t FieldParser::extract_bits(const std::vector<uint8_t>& data, size_t star
 }
 
 std::vector<uint8_t> FieldParser::read_field_bytes(const Field& field, ParseContext& context) {
-    size_t bytes_needed = (field.bits + 7) / 8; // Arrondir vers le haut
+    size_t bytes_needed = (field.bits + 7) / 8; // Round up
     return context.read_bytes(bytes_needed);
 }
 
@@ -275,10 +275,10 @@ FieldValue FieldParser::convert_raw_value(uint32_t raw_value, const Field& field
 std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
     std::string result;
     
-    // Table de conversion 6-bit ASCII ICAO
+    // 6-bit ASCII ICAO conversion table
     const char icao_alphabet[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ     0123456789      ";
     
-    // Extraire les caractères 6 bits par 6 bits
+    // Extract characters 6 bits at a time
     size_t total_bits = data.size() * 8;
     for (size_t bit_pos = 0; bit_pos < total_bits; bit_pos += 6) {
         if (bit_pos + 6 > total_bits) break;
@@ -295,13 +295,13 @@ std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
         
         if (char_code < sizeof(icao_alphabet)) {
             char c = icao_alphabet[char_code];
-            if (c != ' ' || !result.empty()) { // Éviter les espaces en début
+            if (c != ' ' || !result.empty()) { // Avoid leading spaces
                 result += c;
             }
         }
     }
     
-    // Supprimer les espaces en fin
+    // Remove trailing spaces
     while (!result.empty() && result.back() == ' ') {
         result.pop_back();
     }
@@ -310,20 +310,20 @@ std::string FieldParser::decode_6bit_ascii(const std::vector<uint8_t>& data) {
 }
 
 bool FieldParser::evaluate_condition(const std::string& condition, const std::vector<ParsedField>& fields) {
-    // Parser simple pour les conditions comme "FX==1"
+    // Simple parser for conditions like "FX==1"
     if (condition.find("==") != std::string::npos) {
         size_t pos = condition.find("==");
         std::string field_name = condition.substr(0, pos);
         std::string expected_value = condition.substr(pos + 2);
         
-        // Nettoyer les espaces
+        // Clean whitespace
         field_name.erase(std::remove_if(field_name.begin(), field_name.end(), ::isspace), field_name.end());
         expected_value.erase(std::remove_if(expected_value.begin(), expected_value.end(), ::isspace), expected_value.end());
         
-        // Chercher le champ
+        // Search for the field
         for (const auto& field : fields) {
             if (field.name == field_name) {
-                // Vérifier la valeur
+                // Check the value
                 if (std::holds_alternative<bool>(field.value)) {
                     bool field_val = std::get<bool>(field.value);
                     return (expected_value == "1" && field_val) || (expected_value == "0" && !field_val);

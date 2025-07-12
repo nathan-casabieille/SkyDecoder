@@ -5,8 +5,18 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <numeric>
 
 namespace skydecoder {
+
+// Structure for record statistics
+struct RecordStatistics {
+    size_t total_records = 0;
+    size_t valid_records = 0;
+    size_t invalid_records = 0;
+    std::unordered_map<std::string, size_t> item_frequency;
+    std::vector<size_t> record_lengths;
+};
 
 class AsterixDecoder {
 public:
@@ -22,7 +32,7 @@ public:
     // Load all definitions from a directory
     bool load_categories_from_directory(const std::string& directory);
     
-    // Decode a complete ASTERIX block
+    // Decode a complete ASTERIX block (with multi-record support)
     AsterixBlock decode_block(const std::vector<uint8_t>& data);
     
     // Decode an individual ASTERIX message
@@ -34,6 +44,15 @@ public:
     // Message validation
     bool validate_message(const AsterixMessage& message);
     
+    // Multi-record validation (specific for CAT002)
+    bool validate_multirecord_block(const AsterixBlock& block);
+    
+    // Analyze records in a block
+    RecordStatistics analyze_block_records(const AsterixBlock& block);
+    
+    // Print record statistics
+    void print_record_statistics(const RecordStatistics& stats);
+    
     // Utilities
     std::vector<uint8_t> get_supported_categories() const;
     const AsterixCategory* get_category_definition(uint8_t category) const;
@@ -43,11 +62,20 @@ public:
     void set_debug_mode(bool debug) { debug_mode_ = debug; }
     
 private:
-    // Private methods
+    // Private methods for traditional decoding
     AsterixMessage decode_message_internal(ParseContext& context);
     std::vector<std::string> parse_uap_items(const std::vector<uint8_t>& fspec, 
                                             const UserApplicationProfile& uap);
     std::vector<uint8_t> parse_field_specification(ParseContext& context);
+    
+    // Private methods for multi-record decoding
+    void decode_multirecord_block(ParseContext& context, AsterixBlock& block);
+    void decode_traditional_block(ParseContext& context, AsterixBlock& block);
+    AsterixMessage decode_single_record(ParseContext& context);
+    
+    // Utilities for multi-records
+    size_t calculate_record_length(const std::vector<std::string>& present_items, 
+                                  const AsterixCategory& category);
     
     // Validation
     bool validate_mandatory_fields(const AsterixMessage& message, const AsterixCategory& category);

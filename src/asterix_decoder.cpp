@@ -66,6 +66,7 @@ AsterixBlock AsterixDecoder::decode_block(const std::vector<uint8_t>& data) {
     
     if (data.size() < 3) {
         block.valid = false;
+        log_error("Block too small: " + std::to_string(data.size()) + " bytes");
         return block;
     }
     
@@ -87,18 +88,303 @@ AsterixBlock AsterixDecoder::decode_block(const std::vector<uint8_t>& data) {
         
         context.category = cat_it->second.get();
         
-        // Decode all messages in the block
-        while (context.position < block.length && context.has_data(1)) {
-            auto message = decode_message_internal(context);
-            block.messages.push_back(std::move(message));
+        // Handle according to category type
+        if (block.category == 2) {
+            // CAT002: multi-record structure
+            decode_multirecord_block(context, block);
+        } else {
+            // Other categories: traditional structure
+            decode_traditional_block(context, block);
         }
+        
+        block.valid = true;
         
     } catch (const std::exception& e) {
         log_error("Failed to decode block: " + std::string(e.what()));
-        // The block can be partially valid
+        block.valid = false;
     }
     
     return block;
+}
+
+void AsterixDecoder::decode_multirecord_block(ParseContext& context, AsterixBlock& block) {
+    log_debug("Decoding multi-record block for CAT002");
+    
+    size_t block_end = block.length;
+    size_t record_count = 0;
+    
+    // Decode each record in the block
+    while (context.position < block_end) {
+        record_count++;
+        log_debug("Decoding record #" + std::to_string(record_count) + 
+                 " at position " + std::to_string(context.position));
+        
+        try {
+            // Each record has its own FSPEC + data structure
+            auto record = decode_single_record(context);
+            block.messages.push_back(std::move(record));
+            
+        } catch (const std::exception& e) {
+            log_error("Failed to decode record #" + std::to_string(record_count) + 
+                     ": " + std::string(e.what()));
+            
+            // In strict mode, stop decoding
+            if (strict_validation_) {
+                break;
+            }
+            
+            // Otherwise, try to continue (advance by one byte)
+            if (context.position < block_end) {
+                context.position++;
+            }
+        }
+        
+        // Avoid infinite loops
+        if (record_count > 1000) {
+            log_warning("Maximum record count reached, stopping decode");
+            break;
+        }
+    }
+    
+    log_debug("Decoded " + std::to_string(block.messages.size()) + 
+             " records from multi-record block");
+}
+
+AsterixMessage AsterixDecoder::decode_single_record(ParseContext& context) {
+    AsterixMessage record;
+    record.category = context.category->header.category;
+    
+    size_t record_start = context.position;
+    
+    // Read the record's FSPEC
+    auto fspec = parse_field_specification(context);
+    
+    if (debug_mode_) {
+        std::string fspec_hex;
+        for (uint8_t byte : fspec) {
+            char buf[4];
+            sprintf(buf, "%02X ", byte);
+            fspec_hex += buf;
+        }
+        log_debug("Record FSPEC: " + fspec_hex);
+    }
+    
+    // Identify the data items present in this record
+    auto present_items = parse_uap_items(fspec, context.category->uap);
+    
+    log_debug("Record has " + std::to_string(present_items.size()) + " data items");
+    
+    // Calculate the expected record length
+    size_t expected_length = calculate_record_length(present_items, *context.category);
+    size_t available_data = context.size - context.position;
+    
+    if (expected_length > available_data) {
+        log_warning("Expected record length (" + std::to_string(expected_length) + 
+                   ") exceeds available data (" + std::to_string(available_data) + ")");
+    }
+    
+    // Decode each present data item
+    for (const auto& item_id : present_items) {
+        if (item_id == "spare" || item_id.empty()) {
+            continue; // Skip spare and empty fields
+        }
+        
+        auto item_it = context.category->data_items.find(item_id);
+        if (item_it == context.category->data_items.end()) {
+            log_warning("Unknown data item: " + item_id);
+            continue;
+        }
+        
+        size_t item_start = context.position;
+        auto parsed_item = FieldParser::parse_data_item(item_it->second, context);
+        size_t item_length = context.position - item_start;
+        
+        log_debug("Parsed " + item_id + " (" + std::to_string(item_length) + " bytes)");
+        record.data_items.push_back(std::move(parsed_item));
+    }
+    
+    record.length = context.position - record_start;
+    record.valid = true;
+    
+    log_debug("Record decoded successfully: " + std::to_string(record.length) + " bytes total");
+    
+    return record;
+}
+
+void AsterixDecoder::decode_traditional_block(ParseContext& context, AsterixBlock& block) {
+    log_debug("Decoding traditional block");
+    
+    // Decode the single message in the block
+    while (context.position < block.length && context.has_data(1)) {
+        auto message = decode_message_internal(context);
+        block.messages.push_back(std::move(message));
+        
+        // For traditional blocks, usually one message only
+        if (!message.valid) {
+            break;
+        }
+    }
+}
+
+size_t AsterixDecoder::calculate_record_length(
+    const std::vector<std::string>& present_items, 
+    const AsterixCategory& category) {
+    
+    size_t total_length = 0;
+    
+    for (const auto& item_id : present_items) {
+        if (item_id == "spare" || item_id.empty()) {
+            continue;
+        }
+        
+        auto item_it = category.data_items.find(item_id);
+        if (item_it != category.data_items.end()) {
+            const auto& item = item_it->second;
+            
+            switch (item.format) {
+                case DataFormat::FIXED:
+                    if (item.length.has_value()) {
+                        total_length += item.length.value();
+                    }
+                    break;
+                    
+                case DataFormat::VARIABLE:
+                    // For variable fields, estimate at least 1 byte
+                    total_length += 1;
+                    break;
+                    
+                case DataFormat::EXPLICIT:
+                    // First byte indicates length, so at least 2 bytes
+                    total_length += 2;
+                    break;
+                    
+                case DataFormat::REPETITIVE:
+                    // First byte indicates repetitions, so at least 2 bytes
+                    total_length += 2;
+                    break;
+            }
+        }
+    }
+    
+    return total_length;
+}
+
+RecordStatistics AsterixDecoder::analyze_block_records(const AsterixBlock& block) {
+    RecordStatistics stats;
+    
+    stats.total_records = block.messages.size();
+    
+    for (const auto& record : block.messages) {
+        if (record.valid) {
+            stats.valid_records++;
+        } else {
+            stats.invalid_records++;
+        }
+        
+        stats.record_lengths.push_back(record.length);
+        
+        // Count data item frequency
+        for (const auto& item : record.data_items) {
+            stats.item_frequency[item.id]++;
+        }
+    }
+    
+    return stats;
+}
+
+void AsterixDecoder::print_record_statistics(const RecordStatistics& stats) {
+    std::cout << "\n=== RECORD STATISTICS ===" << std::endl;
+    std::cout << "Total records: " << stats.total_records << std::endl;
+    std::cout << "Valid records: " << stats.valid_records << std::endl;
+    std::cout << "Invalid records: " << stats.invalid_records << std::endl;
+    
+    if (stats.total_records > 0) {
+        double success_rate = (static_cast<double>(stats.valid_records) / stats.total_records) * 100.0;
+        std::cout << "Success rate: " << std::fixed << std::setprecision(1) << success_rate << "%" << std::endl;
+    }
+    
+    // Length statistics
+    if (!stats.record_lengths.empty()) {
+        size_t min_length = *std::min_element(stats.record_lengths.begin(), stats.record_lengths.end());
+        size_t max_length = *std::max_element(stats.record_lengths.begin(), stats.record_lengths.end());
+        double avg_length = std::accumulate(stats.record_lengths.begin(), stats.record_lengths.end(), 0.0) / stats.record_lengths.size();
+        
+        std::cout << "\nRecord lengths:" << std::endl;
+        std::cout << "  Min: " << min_length << " bytes" << std::endl;
+        std::cout << "  Max: " << max_length << " bytes" << std::endl;
+        std::cout << "  Avg: " << std::fixed << std::setprecision(1) << avg_length << " bytes" << std::endl;
+    }
+    
+    // Data item frequency
+    if (!stats.item_frequency.empty()) {
+        std::cout << "\nData item frequency:" << std::endl;
+        
+        // Sort by descending frequency
+        std::vector<std::pair<std::string, size_t>> sorted_items(
+            stats.item_frequency.begin(), stats.item_frequency.end());
+        
+        std::sort(sorted_items.begin(), sorted_items.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        
+        for (const auto& pair : sorted_items) {
+            double percentage = (static_cast<double>(pair.second) / stats.total_records) * 100.0;
+            std::cout << "  " << std::setw(12) << pair.first 
+                      << ": " << std::setw(4) << pair.second 
+                      << " (" << std::fixed << std::setprecision(1) << percentage << "%)" << std::endl;
+        }
+    }
+}
+
+bool AsterixDecoder::validate_multirecord_block(const AsterixBlock& block) {
+    if (block.category != 2) {
+        return true; // Validation only applicable to CAT002
+    }
+    
+    bool is_valid = true;
+    
+    // Check that all records are valid
+    for (size_t i = 0; i < block.messages.size(); ++i) {
+        const auto& record = block.messages[i];
+        
+        if (!record.valid) {
+            log_error("Record #" + std::to_string(i + 1) + " is invalid: " + record.error_message);
+            is_valid = false;
+            continue;
+        }
+        
+        // Check mandatory items for CAT002
+        bool has_data_source = false;
+        bool has_message_type = false;
+        
+        for (const auto& item : record.data_items) {
+            if (item.id == "I002/010") has_data_source = true;
+            if (item.id == "I002/000") has_message_type = true;
+        }
+        
+        if (!has_data_source) {
+            log_warning("Record #" + std::to_string(i + 1) + " missing mandatory Data Source Identifier (I002/010)");
+            if (strict_validation_) is_valid = false;
+        }
+        
+        if (!has_message_type) {
+            log_warning("Record #" + std::to_string(i + 1) + " missing mandatory Message Type (I002/000)");
+            if (strict_validation_) is_valid = false;
+        }
+    }
+    
+    // Check length consistency
+    size_t calculated_length = 3; // Block header
+    for (const auto& record : block.messages) {
+        calculated_length += record.length;
+    }
+    
+    if (calculated_length != block.length) {
+        log_warning("Block length mismatch: declared=" + std::to_string(block.length) + 
+                   ", calculated=" + std::to_string(calculated_length));
+        if (strict_validation_) is_valid = false;
+    }
+    
+    return is_valid;
 }
 
 AsterixMessage AsterixDecoder::decode_message(uint8_t category, const std::vector<uint8_t>& data) {
