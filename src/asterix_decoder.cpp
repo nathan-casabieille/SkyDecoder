@@ -249,7 +249,6 @@ AsterixMessage AsterixDecoder::decode_message_internal(ParseContext& context) {
 std::vector<uint8_t> AsterixDecoder::parse_field_specification(ParseContext& context) {
     std::vector<uint8_t> fspec;
     
-    // Read the FSPEC byte by byte until the FX bit is 0
     do {
         if (!context.has_data(1)) {
             throw std::runtime_error("Insufficient data for FSPEC");
