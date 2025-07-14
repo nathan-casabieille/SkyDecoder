@@ -1,12 +1,16 @@
 # SkyDecoder
 
-A light C++ library for decoding ASTERIX (All Purpose STructured Eurocontrol Radar Information EXchange) messages used in air traffic control systems.
+A light C++ library for decoding ASTERIX (All Purpose Structured Eurocontrol Radar Information Exchange) messages used in air traffic control systems.
 
 ```diff
 - WARNING! -
 
 This repository is a work in progress
 ```
+
+<p align="left">
+<img src="https://github.com/nathan-casabieille/SkyDecoder/blob/main/res/application_example.gif" width="400" height="300">
+</p>
 
 ## Features
 
